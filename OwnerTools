@@ -1,20 +1,13 @@
 -- ============================================================
---  OWNER TOOLS  |  Rayfield UI
+--  OWNER TOOLS  |  Rayfield UI  |  Mobile + PC
 --  Features: Player Highlights · Fly · Aimbot (custom-camera safe)
 -- ============================================================
 
-local Players        = game:GetService("Players")
-local RunService     = game:GetService("RunService")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
-
--- ╔══════════════════════════════════════════════════════╗
--- ║  SET THIS to the owner's UserId                      ║
--- ╚══════════════════════════════════════════════════════╝
-local OWNER_ID = 0  -- ← replace with your actual UserId
-
-if LocalPlayer.UserId ~= OWNER_ID then return end
 
 -- ============================================================
 --  Load Rayfield
@@ -22,24 +15,32 @@ if LocalPlayer.UserId ~= OWNER_ID then return end
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 local Window = Rayfield:CreateWindow({
-    Name              = "Owner Tools",
-    Icon              = 0,
-    LoadingTitle      = "Owner Tools",
-    LoadingSubtitle   = "by owner",
-    Theme             = "Default",
-    DisableRayfieldPrompts  = false,
-    DisableBuildWarnings    = false,
-    ConfigurationSaving = { Enabled = false },
+    Name             = "Owner Tools",
+    Icon             = 0,
+    LoadingTitle     = "Owner Tools",
+    LoadingSubtitle  = "Loading...",
+    Theme            = "Default",
+    DisableRayfieldPrompts = false,
+    DisableBuildWarnings   = false,
+    ConfigurationSaving    = { Enabled = false },
     KeySystem = false,
 })
 
 -- ============================================================
+--  Mobile detection
+-- ============================================================
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- ============================================================
 --  State
 -- ============================================================
-local flyActive      = false
-local aimbotActive   = false
+local flyActive       = false
+local aimbotActive    = false
 local highlightActive = false
-local highlights     = {}   -- [Player] = Highlight instance
+local highlights      = {}  -- [Player] = Highlight instance
+local FLY_SPEED       = 60
+local AIMBOT_FOV      = 500
+local AIM_SMOOTHING   = 0.25
 
 -- ============================================================
 --  HIGHLIGHT
@@ -50,13 +51,13 @@ local FILL_ALPHA    = 0.5
 
 local function createHighlight(char)
     local h = Instance.new("Highlight")
-    h.FillColor          = FILL_COLOR
-    h.OutlineColor       = OUTLINE_COLOR
-    h.FillTransparency   = FILL_ALPHA
+    h.FillColor           = FILL_COLOR
+    h.OutlineColor        = OUTLINE_COLOR
+    h.FillTransparency    = FILL_ALPHA
     h.OutlineTransparency = 0
-    h.Adornee            = char
-    h.DepthMode          = Enum.HighlightDepthMode.AlwaysOnTop
-    h.Parent             = char
+    h.Adornee             = char
+    h.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent              = char
     return h
 end
 
@@ -77,15 +78,10 @@ end
 
 local function refreshHighlights()
     for _, plr in ipairs(Players:GetPlayers()) do
-        if highlightActive then
-            addHighlight(plr)
-        else
-            removeHighlight(plr)
-        end
+        if highlightActive then addHighlight(plr) else removeHighlight(plr) end
     end
 end
 
--- Re-highlight when someone's character respawns
 Players.PlayerAdded:Connect(function(plr)
     plr.CharacterAdded:Connect(function()
         task.wait(0.5)
@@ -93,7 +89,6 @@ Players.PlayerAdded:Connect(function(plr)
     end)
 end)
 Players.PlayerRemoving:Connect(removeHighlight)
-
 for _, plr in ipairs(Players:GetPlayers()) do
     plr.CharacterAdded:Connect(function()
         task.wait(0.5)
@@ -102,9 +97,60 @@ for _, plr in ipairs(Players:GetPlayers()) do
 end
 
 -- ============================================================
---  FLY
+--  FLY  —  mobile: thumbstick moves, on-screen Up/Down buttons
+--           PC:     WASD moves, Space = Up, LCtrl = Down
 -- ============================================================
-local FLY_SPEED = 60
+
+-- Mobile Up/Down buttons (created only on mobile, shown only while flying)
+local flyGui = nil
+local mobileUp, mobileDown = false, false
+
+local function buildMobileFlyButtons()
+    if flyGui then flyGui:Destroy() end
+    local pg = LocalPlayer:WaitForChild("PlayerGui")
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "FlyButtons"
+    sg.ResetOnSpawn = false
+    sg.DisplayOrder = 10
+    sg.Parent = pg
+    flyGui = sg
+
+    local function makeBtn(label, posX, posY, onDown, onUp)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 80, 0, 80)
+        btn.Position = UDim2.new(posX, 0, posY, 0)
+        btn.AnchorPoint = Vector2.new(0.5, 0.5)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        btn.BackgroundTransparency = 0.3
+        btn.Text = label
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.TextSize = 22
+        btn.Font = Enum.Font.GothamBold
+        btn.AutoButtonColor = false
+        btn.Parent = sg
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 16)
+        btn.MouseButton1Down:Connect(onDown)
+        btn.MouseButton1Up:Connect(onUp)
+        -- Touch events for mobile
+        btn.TouchLongPress:Connect(function() end) -- prevent long-press menu
+        local inputBegan = btn.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then onDown() end
+        end)
+        local inputEnded = btn.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then onUp() end
+        end)
+        return btn
+    end
+
+    -- Bottom-right area, above the jump button
+    makeBtn("▲", 0.88, 0.72, function() mobileUp = true end, function() mobileUp = false end)
+    makeBtn("▼", 0.88, 0.85, function() mobileDown = true end, function() mobileDown = false end)
+end
+
+local function removeMobileFlyButtons()
+    if flyGui then flyGui:Destroy() flyGui = nil end
+    mobileUp, mobileDown = false, false
+end
 
 local function startFly()
     local char = LocalPlayer.Character
@@ -127,28 +173,28 @@ local function startFly()
     bg.CFrame    = hrp.CFrame
     bg.Parent    = hrp
 
+    if isMobile then buildMobileFlyButtons() end
+
     RunService:BindToRenderStep("OwnerFly", Enum.RenderPriority.Input.Value, function()
         if not flyActive then return end
-        local cam = workspace.CurrentCamera
+        local cam  = workspace.CurrentCamera
         local move = Vector3.zero
 
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-            move += cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-            move -= cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-            move -= cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-            move += cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-            move += Vector3.yAxis
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-            move -= Vector3.yAxis
+        if isMobile then
+            -- Thumbstick sets Humanoid.MoveDirection (world-space unit vector)
+            local md = humanoid.MoveDirection
+            if md.Magnitude > 0.1 then
+                move = Vector3.new(md.X, 0, md.Z)
+            end
+            if mobileUp   then move += Vector3.yAxis end
+            if mobileDown then move -= Vector3.yAxis end
+        else
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += cam.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= cam.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= cam.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += cam.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then move += Vector3.yAxis end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.yAxis end
         end
 
         bv.Velocity = if move.Magnitude > 0 then move.Unit * FLY_SPEED else Vector3.zero
@@ -159,6 +205,7 @@ end
 local function stopFly()
     flyActive = false
     RunService:UnbindFromRenderStep("OwnerFly")
+    if isMobile then removeMobileFlyButtons() end
 
     local char = LocalPlayer.Character
     if char then
@@ -176,20 +223,11 @@ end
 -- ============================================================
 --  AIMBOT  —  custom-camera safe
 -- ============================================================
---  Strategy:
---    1. Rotate HumanoidRootPart to face the target every frame.
---       This makes character-based weapons (tools, melee, ray from torso)
---       always point at the enemy regardless of camera.
---    2. Override workspace.CurrentCamera.CFrame AFTER all camera scripts
---       run (RenderPriority.Camera + 1).  Even if a custom camera script
---       sets the CFrame at Camera priority, we overwrite it one step later,
---       so camera-based weapons (ray from camera) also aim correctly.
+--  1. Rotate HumanoidRootPart to face the target (character-based weapons).
+--  2. Override CurrentCamera.CFrame at RenderPriority.Camera + 1, which runs
+--     AFTER every camera script — so even a custom camera can't undo it.
+--  On mobile the aimbot is always "held" (no button needed); on PC same thing.
 -- ============================================================
-
-local AIMBOT_FOV    = 500   -- max pixel radius from screen centre to consider a target
-local AIM_SMOOTHING = 0.25  -- 0 = instant lock, 1 = very slow (lerp factor)
-
-local aimbotConn = nil
 
 local function getScreenCenter()
     local vp = workspace.CurrentCamera.ViewportSize
@@ -197,24 +235,22 @@ local function getScreenCenter()
 end
 
 local function getNearestTarget()
-    local cam   = workspace.CurrentCamera
-    local char  = LocalPlayer.Character
-    local hrp   = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil, nil end
+    local cam  = workspace.CurrentCamera
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
 
-    local center   = getScreenCenter()
-    local best     = nil
+    local center  = getScreenCenter()
+    local best    = nil
     local bestDist = AIMBOT_FOV
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer then continue end
         local pChar = plr.Character
         if not pChar then continue end
-
         local pHuman = pChar:FindFirstChildOfClass("Humanoid")
         if not pHuman or pHuman.Health <= 0 then continue end
 
-        -- Prefer aiming at the head; fall back to HumanoidRootPart
         local aimPart = pChar:FindFirstChild("Head") or pChar:FindFirstChild("HumanoidRootPart")
         if not aimPart then continue end
 
@@ -234,7 +270,6 @@ end
 local function startAimbot()
     aimbotActive = true
 
-    -- High-priority step: runs AFTER custom camera scripts (Camera + 1)
     RunService:BindToRenderStep("OwnerAimbot", Enum.RenderPriority.Camera.Value + 1, function()
         if not aimbotActive then return end
 
@@ -245,18 +280,18 @@ local function startAimbot()
         local target = getNearestTarget()
         if not target then return end
 
-        local cam      = workspace.CurrentCamera
-        local camPos   = cam.CFrame.Position
+        local cam       = workspace.CurrentCamera
+        local camPos    = cam.CFrame.Position
         local targetPos = target.Position
 
-        -- 1. Rotate character root to face target (flat, no vertical tilt)
+        -- Rotate character root (flat) so character-based weapons track the target
         local flat = Vector3.new(targetPos.X - hrp.Position.X, 0, targetPos.Z - hrp.Position.Z)
         if flat.Magnitude > 0.1 then
-            local targetCF = CFrame.new(hrp.Position, hrp.Position + flat)
-            hrp.CFrame     = hrp.CFrame:Lerp(targetCF, 1 - AIM_SMOOTHING)
+            local goal = CFrame.new(hrp.Position, hrp.Position + flat)
+            hrp.CFrame = hrp.CFrame:Lerp(goal, 1 - AIM_SMOOTHING)
         end
 
-        -- 2. Override camera to look at target (beats custom camera because we run after it)
+        -- Override camera after all camera scripts run
         local newCamCF = CFrame.new(camPos, targetPos)
         cam.CFrame     = cam.CFrame:Lerp(newCamCF, 1 - AIM_SMOOTHING)
     end)
@@ -268,7 +303,7 @@ local function stopAimbot()
 end
 
 -- ============================================================
---  TABS / UI
+--  UI TABS
 -- ============================================================
 
 -- ── Highlight Tab ──────────────────────────────────────────
@@ -276,42 +311,29 @@ local tabHL = Window:CreateTab("Highlights", 4483362458)
 tabHL:CreateSection("Player ESP")
 
 tabHL:CreateToggle({
-    Name         = "Highlight Players",
-    CurrentValue = false,
-    Flag         = "hl_toggle",
+    Name = "Highlight Players", CurrentValue = false, Flag = "hl_toggle",
     Callback = function(v)
         highlightActive = v
         refreshHighlights()
     end,
 })
-
 tabHL:CreateColorPicker({
-    Name     = "Fill Color",
-    Color    = FILL_COLOR,
-    Flag     = "hl_fill",
+    Name = "Fill Color", Color = FILL_COLOR, Flag = "hl_fill",
     Callback = function(c)
         FILL_COLOR = c
         for _, h in pairs(highlights) do h.FillColor = c end
     end,
 })
-
 tabHL:CreateColorPicker({
-    Name     = "Outline Color",
-    Color    = OUTLINE_COLOR,
-    Flag     = "hl_outline",
+    Name = "Outline Color", Color = OUTLINE_COLOR, Flag = "hl_outline",
     Callback = function(c)
         OUTLINE_COLOR = c
         for _, h in pairs(highlights) do h.OutlineColor = c end
     end,
 })
-
 tabHL:CreateSlider({
-    Name         = "Fill Transparency",
-    Range        = {0, 1},
-    Increment    = 0.05,
-    Suffix       = "",
-    CurrentValue = 0.5,
-    Flag         = "hl_alpha",
+    Name = "Fill Transparency", Range = {0, 1}, Increment = 0.05,
+    Suffix = "", CurrentValue = 0.5, Flag = "hl_alpha",
     Callback = function(v)
         FILL_ALPHA = v
         for _, h in pairs(highlights) do h.FillTransparency = v end
@@ -323,78 +345,52 @@ local tabFly = Window:CreateTab("Fly", 4483362458)
 tabFly:CreateSection("Flight")
 
 tabFly:CreateToggle({
-    Name         = "Enable Fly",
-    CurrentValue = false,
-    Flag         = "fly_toggle",
+    Name = "Enable Fly", CurrentValue = false, Flag = "fly_toggle",
     Callback = function(v)
         if v then startFly() else stopFly() end
     end,
 })
-
 tabFly:CreateSlider({
-    Name         = "Fly Speed",
-    Range        = {10, 200},
-    Increment    = 5,
-    Suffix       = " studs/s",
-    CurrentValue = 60,
-    Flag         = "fly_speed",
-    Callback = function(v)
-        FLY_SPEED = v
-    end,
+    Name = "Fly Speed", Range = {10, 200}, Increment = 5,
+    Suffix = " studs/s", CurrentValue = 60, Flag = "fly_speed",
+    Callback = function(v) FLY_SPEED = v end,
 })
 
-tabFly:CreateLabel("W/A/S/D — Move  |  Space — Up  |  LCtrl — Down")
+if isMobile then
+    tabFly:CreateLabel("Thumbstick — Move horizontal")
+    tabFly:CreateLabel("▲ / ▼ buttons (bottom-right) — Up / Down")
+else
+    tabFly:CreateLabel("WASD — Move  |  Space — Up  |  LCtrl — Down")
+end
 
 -- ── Aimbot Tab ─────────────────────────────────────────────
 local tabAB = Window:CreateTab("Aimbot", 4483362458)
 tabAB:CreateSection("Aimbot")
 
 tabAB:CreateToggle({
-    Name         = "Enable Aimbot",
-    CurrentValue = false,
-    Flag         = "ab_toggle",
+    Name = "Enable Aimbot", CurrentValue = false, Flag = "ab_toggle",
     Callback = function(v)
         if v then startAimbot() else stopAimbot() end
     end,
 })
-
 tabAB:CreateSlider({
-    Name         = "FOV Radius (px)",
-    Range        = {50, 1000},
-    Increment    = 25,
-    Suffix       = " px",
-    CurrentValue = 500,
-    Flag         = "ab_fov",
-    Callback = function(v)
-        AIMBOT_FOV = v
-    end,
+    Name = "FOV Radius (px)", Range = {50, 1000}, Increment = 25,
+    Suffix = " px", CurrentValue = 500, Flag = "ab_fov",
+    Callback = function(v) AIMBOT_FOV = v end,
 })
-
 tabAB:CreateSlider({
-    Name         = "Smoothing",
-    Range        = {0, 90},
-    Increment    = 1,
-    Suffix       = "%",
-    CurrentValue = 25,
-    Flag         = "ab_smooth",
-    Callback = function(v)
-        AIM_SMOOTHING = v / 100
-    end,
+    Name = "Smoothing", Range = {0, 90}, Increment = 1,
+    Suffix = "%", CurrentValue = 25, Flag = "ab_smooth",
+    Callback = function(v) AIM_SMOOTHING = v / 100 end,
 })
-
-tabAB:CreateLabel("Rotates character + overrides camera after custom scripts")
-tabAB:CreateLabel("Aims at Head (falls back to root if no head)")
+tabAB:CreateLabel("Aims at Head · works with custom cameras · no hold required")
 
 -- ============================================================
---  Auto-cleanup on respawn
+--  Respawn handling
 -- ============================================================
 LocalPlayer.CharacterAdded:Connect(function()
-    if flyActive then
-        task.wait(1)
-        startFly()
-    end
+    if flyActive then task.wait(1); startFly() end
 end)
-
 LocalPlayer.CharacterRemoving:Connect(function()
     if flyActive then stopFly() end
 end)
